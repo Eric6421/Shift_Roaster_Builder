@@ -21,6 +21,7 @@ src/
 ├── views/            # Presentational React components
 │   ├── App.tsx
 │   ├── EmployeeManager.tsx
+│   ├── RosterGrid.tsx
 │   └── components/
 │       └── AppShell.tsx
 ├── assets/           # Static images / icons

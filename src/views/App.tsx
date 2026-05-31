@@ -1,8 +1,9 @@
-import { ConfigProvider } from 'antd'
+import { ConfigProvider, Tabs } from 'antd'
 import { format } from 'date-fns'
 import { useAppContext, useRosterController } from '@/controllers'
 import { AppShell } from '@/views/components/AppShell'
 import { EmployeeManager } from '@/views/EmployeeManager'
+import { RosterGrid } from '@/views/RosterGrid'
 
 function App() {
   const { appName } = useAppContext()
@@ -19,11 +20,36 @@ function App() {
       }}
     >
       <AppShell title={appName} subtitle={today}>
-        <EmployeeManager
-          employees={roster.employees}
-          addEmployee={roster.addEmployee}
-          editEmployee={roster.editEmployee}
-          removeEmployee={roster.removeEmployee}
+        <Tabs
+          defaultActiveKey="roster"
+          items={[
+            {
+              key: 'roster',
+              label: 'Weekly roster',
+              children: (
+                <RosterGrid
+                  employees={roster.employees}
+                  shifts={roster.shifts}
+                  assignShift={roster.assignShift}
+                  removeShift={roster.removeShift}
+                  validateShift={roster.validateShift}
+                  calculateWeeklyHours={roster.calculateWeeklyHours}
+                />
+              ),
+            },
+            {
+              key: 'employees',
+              label: 'Employees',
+              children: (
+                <EmployeeManager
+                  employees={roster.employees}
+                  addEmployee={roster.addEmployee}
+                  editEmployee={roster.editEmployee}
+                  removeEmployee={roster.removeEmployee}
+                />
+              ),
+            },
+          ]}
         />
       </AppShell>
     </ConfigProvider>
