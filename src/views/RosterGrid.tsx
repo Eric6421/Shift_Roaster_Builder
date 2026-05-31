@@ -1,21 +1,27 @@
-import { Alert, Form, Input, Modal, Popconfirm, Space, Tag, Tooltip, message } from 'antd'
-import { AlertTriangle, Clock, Plus, Trash2, User } from 'lucide-react'
+import { Alert, Button, Form, Input, Modal, Popconfirm, Space, Tag, Tooltip, message } from 'antd'
+import { AlertTriangle, Clock, Download, Plus, Trash2, User } from 'lucide-react'
+import { downloadRosterCsv } from '@/controllers'
 import { SummaryPanel } from '@/views/SummaryPanel'
 import { useCallback, useMemo, useState } from 'react'
-import type { useRosterController } from '@/controllers/useRosterController'
+import {
+  isEmployeeAvailableOnDay,
+  isShiftTimeInAllowedRange,
+  validateShiftTimes,
+  type useRosterController,
+} from '@/controllers/useRosterController'
 import type { DayOfWeek, Employee, Shift, ShiftConflict } from '@/models/types'
-
-const DAYS: { value: DayOfWeek; label: string; short: string }[] = [
-  { value: 0, label: 'Monday', short: 'Mon' },
-  { value: 1, label: 'Tuesday', short: 'Tue' },
-  { value: 2, label: 'Wednesday', short: 'Wed' },
-  { value: 3, label: 'Thursday', short: 'Thu' },
-  { value: 4, label: 'Friday', short: 'Fri' },
-  { value: 5, label: 'Saturday', short: 'Sat' },
-  { value: 6, label: 'Sunday', short: 'Sun' },
-]
+import { SHIFT_EARLIEST_TIME, SHIFT_LATEST_TIME, WEEK_DAY_OPTIONS } from '@/models/types'
 
 const SHIFT_DRAG_TYPE = 'application/x-shift-id'
+
+const shiftTimeRangeRule = {
+  validator: (_: unknown, value: string) => {
+    if (!value || isShiftTimeInAllowedRange(value)) {
+      return Promise.resolve()
+    }
+    return Promise.reject(new Error('Time must be between 9:00 AM and 7:00 PM.'))
+  },
+}
 
 type ShiftFormValues = {
   name: string
@@ -91,6 +97,7 @@ export function RosterGrid({
   calculateWeeklyHours,
 }: RosterGridProps) {
   const [form] = Form.useForm<ShiftFormValues>()
+  const watchedStartTime = Form.useWatch('startTime', form)
   const [modalOpen, setModalOpen] = useState(false)
   const [modalContext, setModalContext] = useState<ModalContext | null>(null)
   const [draggingShiftId, setDraggingShiftId] = useState<string | null>(null)
@@ -161,8 +168,28 @@ export function RosterGrid({
       const name = values.name.trim()
       const { startTime, endTime } = values
 
-      if (startTime >= endTime) {
-        message.error('End time must be after start time.')
+      const timeError = validateShiftTimes(startTime, endTime)
+      if (timeError) {
+        message.error(timeError)
+        return
+      }
+
+      const targetEmployeeId =
+        modalContext.mode === 'assign'
+          ? modalContext.employeeId
+          : modalContext.shift.employeeId
+      const targetDay =
+        modalContext.mode === 'assign'
+          ? modalContext.dayOfWeek
+          : modalContext.shift.dayOfWeek
+      const targetEmployee = employees.find((e) => e.id === targetEmployeeId)
+      const targetDayLabel =
+        WEEK_DAY_OPTIONS.find((d) => d.value === targetDay)?.label ?? 'this day'
+
+      if (!isEmployeeAvailableOnDay(targetEmployee, targetDay)) {
+        message.error(
+          `${targetEmployee?.name ?? 'This employee'} cannot work on ${targetDayLabel}. Update availability in Employees.`,
+        )
         return
       }
 
@@ -184,7 +211,7 @@ export function RosterGrid({
     } catch {
       message.error('Please fix the highlighted fields before saving.')
     }
-  }, [assignShift, closeModal, editShift, form, modalContext, validateShift])
+  }, [assignShift, closeModal, editShift, employees, form, modalContext, validateShift])
 
   const handleRemoveShift = useCallback(
     (shift: Shift) => {
@@ -218,13 +245,24 @@ export function RosterGrid({
         return
       }
 
+      const targetEmployee = employees.find((e) => e.id === target.employeeId)
+      const targetDayLabel =
+        WEEK_DAY_OPTIONS.find((d) => d.value === target.dayOfWeek)?.label ?? 'this day'
+
+      if (!isEmployeeAvailableOnDay(targetEmployee, target.dayOfWeek)) {
+        message.error(
+          `${targetEmployee?.name ?? 'This employee'} cannot work on ${targetDayLabel}.`,
+        )
+        return
+      }
+
       const updated = editShift(shiftId, {
         employeeId: target.employeeId,
         dayOfWeek: target.dayOfWeek,
       })
       notifyConflicts(updated, validateShift, 'Shift moved.')
     },
-    [editShift, shifts, validateShift],
+    [editShift, employees, shifts, validateShift],
   )
 
   const modalEmployee =
@@ -236,33 +274,54 @@ export function RosterGrid({
 
   const modalDay =
     modalContext?.mode === 'assign'
-      ? DAYS.find((d) => d.value === modalContext.dayOfWeek)
+      ? WEEK_DAY_OPTIONS.find((d) => d.value === modalContext.dayOfWeek)
       : modalContext?.mode === 'edit'
-        ? DAYS.find((d) => d.value === modalContext.shift.dayOfWeek)
+        ? WEEK_DAY_OPTIONS.find((d) => d.value === modalContext.shift.dayOfWeek)
         : undefined
+
+  const modalDayUnavailable =
+    modalEmployee && modalDay
+      ? !isEmployeeAvailableOnDay(modalEmployee, modalDay.value)
+      : false
 
   const modalTitle = modalContext?.mode === 'edit' ? 'Edit shift' : 'Assign shift'
   const modalOkText = modalContext?.mode === 'edit' ? 'Save changes' : 'Assign shift'
 
+  const handleExportCsv = useCallback(() => {
+    if (employees.length === 0) {
+      message.info('Add employees before exporting the roster.')
+      return
+    }
+    downloadRosterCsv(employees, shifts, { validateShift })
+    message.success('Roster exported as CSV.')
+  }, [employees, shifts, validateShift])
+
   return (
     <div className="mx-auto w-full max-w-7xl">
-      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+      <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <h2 className="text-lg font-semibold text-slate-900">Weekly roster</h2>
           <p className="text-sm text-slate-600">
             Assign shifts across the week. Drag a shift to another day or employee. Overlapping
-            shifts and more than 5 consecutive days are flagged.
+            shifts, unavailable days, and more than 5 consecutive days are flagged.
           </p>
         </div>
-        {conflictCount > 0 ? (
-          <Alert
-            type="warning"
-            showIcon
-            icon={<AlertTriangle className="h-4 w-4" aria-hidden />}
-            message={`${conflictCount} shift${conflictCount === 1 ? '' : 's'} with scheduling conflicts`}
-            className="max-w-sm shrink-0"
-          />
-        ) : null}
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end">
+          {conflictCount > 0 ? (
+            <Alert
+              type="warning"
+              showIcon
+              icon={<AlertTriangle className="h-4 w-4" aria-hidden />}
+              message={`${conflictCount} shift${conflictCount === 1 ? '' : 's'} with scheduling conflicts`}
+              className="max-w-sm shrink-0"
+            />
+          ) : null}
+          <Space wrap className="shrink-0">
+            <Button icon={<Download className="h-4 w-4" aria-hidden />} onClick={handleExportCsv}>
+              Export CSV
+            </Button>
+          </Space>
+        </div>
       </div>
 
       <div className="flex flex-col gap-6 xl:flex-row xl:items-start">
@@ -282,7 +341,7 @@ export function RosterGrid({
                 <div className="sticky left-0 z-20 border-b border-r border-slate-200 bg-slate-100 px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
                   Employee
                 </div>
-                {DAYS.map((day) => (
+                {WEEK_DAY_OPTIONS.map((day) => (
                   <div
                     key={day.value}
                     className="border-b border-r border-slate-200 bg-slate-100 px-2 py-3 text-center last:border-r-0"
@@ -360,7 +419,19 @@ export function RosterGrid({
             ) : null}
           </div>
         ) : null}
+        {modalDayUnavailable && modalEmployee && modalDay ? (
+          <Alert
+            type="error"
+            showIcon
+            className="mb-4"
+            message={`${modalEmployee.name} is not available on ${modalDay.label}`}
+            description="Change employee availability under Employees, or pick another day."
+          />
+        ) : null}
         <Form<ShiftFormValues> form={form} layout="vertical">
+          <p className="mb-4 text-sm text-slate-500">
+            Shift times must be between 9:00 AM and 7:00 PM.
+          </p>
           <Form.Item
             label="Shift name"
             name="name"
@@ -371,16 +442,40 @@ export function RosterGrid({
           <Form.Item
             label="Start time"
             name="startTime"
-            rules={[{ required: true, message: 'Start time is required.' }]}
+            rules={[
+              { required: true, message: 'Start time is required.' },
+              shiftTimeRangeRule,
+            ]}
           >
-            <Input type="time" />
+            <Input
+              type="time"
+              min={SHIFT_EARLIEST_TIME}
+              max={SHIFT_LATEST_TIME}
+            />
           </Form.Item>
           <Form.Item
             label="End time"
             name="endTime"
-            rules={[{ required: true, message: 'End time is required.' }]}
+            dependencies={['startTime']}
+            rules={[
+              { required: true, message: 'End time is required.' },
+              shiftTimeRangeRule,
+              ({ getFieldValue }) => ({
+                validator: (_, value: string) => {
+                  const startTime = getFieldValue('startTime') as string
+                  if (!value || !startTime || value > startTime) {
+                    return Promise.resolve()
+                  }
+                  return Promise.reject(new Error('End time must be after start time.'))
+                },
+              }),
+            ]}
           >
-            <Input type="time" />
+            <Input
+              type="time"
+              min={watchedStartTime && watchedStartTime > SHIFT_EARLIEST_TIME ? watchedStartTime : SHIFT_EARLIEST_TIME}
+              max={SHIFT_LATEST_TIME}
+            />
           </Form.Item>
         </Form>
       </Modal>
@@ -442,10 +537,11 @@ function EmployeeRow({
         </Space>
       </div>
 
-      {DAYS.map((day) => {
+      {WEEK_DAY_OPTIONS.map((day) => {
         const cellTarget: DropTarget = { employeeId: employee.id, dayOfWeek: day.value }
         const cellShifts = shiftsByEmployeeDay.get(`${employee.id}-${day.value}`) ?? []
         const isEmpty = cellShifts.length === 0
+        const dayUnavailable = !isEmployeeAvailableOnDay(employee, day.value)
         const isDropTarget =
           draggingShiftId !== null &&
           dropTarget?.employeeId === cellTarget.employeeId &&
@@ -458,9 +554,11 @@ function EmployeeRow({
               'group relative min-h-[88px] border-b border-r border-slate-200 p-1.5 last:border-r-0',
               isDropTarget
                 ? 'bg-blue-50 ring-2 ring-inset ring-blue-400'
-                : isEmpty
-                  ? 'bg-slate-50/40'
-                  : 'bg-white hover:bg-slate-50/80',
+                : dayUnavailable
+                  ? 'bg-amber-50/60'
+                  : isEmpty
+                    ? 'bg-slate-50/40'
+                    : 'bg-white hover:bg-slate-50/80',
             ].join(' ')}
             onDragOver={(event) => {
               if (!event.dataTransfer.types.includes(SHIFT_DRAG_TYPE)) {
@@ -483,6 +581,10 @@ function EmployeeRow({
             }}
             onDrop={(event) => {
               event.preventDefault()
+              if (dayUnavailable) {
+                onDragEnd()
+                return
+              }
               const shiftId = event.dataTransfer.getData(SHIFT_DRAG_TYPE)
               if (shiftId) {
                 onDropShift(shiftId, cellTarget)
@@ -491,15 +593,26 @@ function EmployeeRow({
             }}
           >
             {isEmpty ? (
-              <button
-                type="button"
-                onClick={() => onAssign(employee.id, day.value)}
-                className="flex h-full min-h-[76px] w-full flex-col items-center justify-center gap-1.5 rounded-md border border-dashed border-slate-300 bg-white text-slate-400 transition-colors hover:border-blue-400 hover:bg-blue-50/60 hover:text-blue-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-blue-500"
-                aria-label={`Assign shift for ${employee.name} on ${day.label}`}
-              >
-                <Plus className="h-4 w-4" aria-hidden />
-                <span className="text-xs font-medium">Assign shift</span>
-              </button>
+              dayUnavailable ? (
+                <Tooltip title={`${employee.name} is not available on ${day.label}`}>
+                  <div
+                    className="flex h-full min-h-[76px] w-full flex-col items-center justify-center gap-1 rounded-md border border-dashed border-amber-200 bg-amber-50/80 px-2 text-center text-amber-700"
+                    aria-label={`${employee.name} unavailable on ${day.label}`}
+                  >
+                    <span className="text-xs font-medium">Unavailable</span>
+                  </div>
+                </Tooltip>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => onAssign(employee.id, day.value)}
+                  className="flex h-full min-h-[76px] w-full flex-col items-center justify-center gap-1.5 rounded-md border border-dashed border-slate-300 bg-white text-slate-400 transition-colors hover:border-blue-400 hover:bg-blue-50/60 hover:text-blue-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-blue-500"
+                  aria-label={`Assign shift for ${employee.name} on ${day.label}`}
+                >
+                  <Plus className="h-4 w-4" aria-hidden />
+                  <span className="text-xs font-medium">Assign shift</span>
+                </button>
+              )
             ) : (
               <>
                 <div className="flex flex-col gap-1">
@@ -516,15 +629,17 @@ function EmployeeRow({
                     />
                   ))}
                 </div>
-                <button
-                  type="button"
-                  onClick={() => onAssign(employee.id, day.value)}
-                  className="mt-1 flex w-full items-center justify-center gap-1 rounded border border-dashed border-slate-200 py-1 text-[11px] text-slate-400 opacity-0 transition-opacity hover:border-blue-300 hover:text-blue-600 group-hover:opacity-100 focus:opacity-100"
-                  aria-label={`Add another shift for ${employee.name} on ${day.label}`}
-                >
-                  <Plus className="h-3 w-3" aria-hidden />
-                  Add shift
-                </button>
+                {!dayUnavailable ? (
+                  <button
+                    type="button"
+                    onClick={() => onAssign(employee.id, day.value)}
+                    className="mt-1 flex w-full items-center justify-center gap-1 rounded border border-dashed border-slate-200 py-1 text-[11px] text-slate-400 opacity-0 transition-opacity hover:border-blue-300 hover:text-blue-600 group-hover:opacity-100 focus:opacity-100"
+                    aria-label={`Add another shift for ${employee.name} on ${day.label}`}
+                  >
+                    <Plus className="h-3 w-3" aria-hidden />
+                    Add shift
+                  </button>
+                ) : null}
               </>
             )}
           </div>

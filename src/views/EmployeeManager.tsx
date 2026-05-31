@@ -14,11 +14,13 @@ import type { ColumnsType } from 'antd/es/table'
 import { Pencil, Plus, Trash2 } from 'lucide-react'
 import { useCallback, useState } from 'react'
 import type { useRosterController } from '@/controllers/useRosterController'
-import { ROLE_OPTIONS, type Employee } from '@/models/types'
+import { isEmployeeNameTaken } from '@/controllers/useRosterController'
+import { ROLE_OPTIONS, WEEK_DAY_OPTIONS, type DayOfWeek, type Employee } from '@/models/types'
 
 type EmployeeFormValues = {
   name: string
   roles: string[]
+  unavailableDays: DayOfWeek[]
 }
 
 type RosterEmployeeActions = Pick<
@@ -40,14 +42,18 @@ export function EmployeeManager({
 
   const openCreateModal = useCallback(() => {
     setEditingEmployee(null)
-    form.setFieldsValue({ name: '', roles: [] })
+    form.setFieldsValue({ name: '', roles: [], unavailableDays: [] })
     setModalOpen(true)
   }, [form])
 
   const openEditModal = useCallback(
     (employee: Employee) => {
       setEditingEmployee(employee)
-      form.setFieldsValue({ name: employee.name, roles: employee.roles })
+      form.setFieldsValue({
+        name: employee.name,
+        roles: employee.roles,
+        unavailableDays: employee.unavailableDays,
+      })
       setModalOpen(true)
     },
     [form],
@@ -66,6 +72,9 @@ export function EmployeeManager({
       const roles = values.roles.filter((role) =>
         (ROLE_OPTIONS as readonly string[]).includes(role),
       )
+      const unavailableDays = (values.unavailableDays ?? []).filter((day): day is DayOfWeek =>
+        WEEK_DAY_OPTIONS.some((option) => option.value === day),
+      )
 
       if (!name) {
         message.error('Employee name cannot be empty.')
@@ -77,11 +86,24 @@ export function EmployeeManager({
         return
       }
 
+      if (isEmployeeNameTaken(name, employees, editingEmployee?.id)) {
+        message.error('An employee with this name already exists.')
+        return
+      }
+
       if (editingEmployee) {
-        editEmployee(editingEmployee.id, { name, roles })
+        const updated = editEmployee(editingEmployee.id, { name, roles, unavailableDays })
+        if (!updated) {
+          message.error('An employee with this name already exists.')
+          return
+        }
         message.success(`Updated ${name}.`)
       } else {
-        addEmployee({ name, roles })
+        const created = addEmployee({ name, roles, unavailableDays })
+        if (!created) {
+          message.error('An employee with this name already exists.')
+          return
+        }
         message.success(`Added ${name}.`)
       }
 
@@ -89,7 +111,7 @@ export function EmployeeManager({
     } catch {
       message.error('Please fix the highlighted fields before saving.')
     }
-  }, [addEmployee, closeModal, editEmployee, editingEmployee, form])
+  }, [addEmployee, closeModal, editEmployee, editingEmployee, employees, form])
 
   const handleRemove = useCallback(
     (employee: Employee) => {
@@ -119,6 +141,26 @@ export function EmployeeManager({
           ))}
         </Space>
       ),
+    },
+    {
+      title: 'Unavailable',
+      dataIndex: 'unavailableDays',
+      key: 'unavailableDays',
+      render: (unavailableDays: DayOfWeek[]) =>
+        unavailableDays.length === 0 ? (
+          <span className="text-sm text-slate-400">Any day</span>
+        ) : (
+          <Space size={[4, 4]} wrap>
+            {unavailableDays.map((day) => {
+              const label = WEEK_DAY_OPTIONS.find((option) => option.value === day)?.short ?? day
+              return (
+                <Tag key={day} color="default">
+                  {label}
+                </Tag>
+              )
+            })}
+          </Space>
+        ),
     },
     {
       title: 'Actions',
@@ -161,7 +203,7 @@ export function EmployeeManager({
         <div>
           <h2 className="text-lg font-semibold text-slate-900">Employees</h2>
           <p className="text-sm text-slate-600">
-            Add team members and assign one or more roles for scheduling.
+            Add team members, assign roles, and mark days they cannot work.
           </p>
         </div>
         <Button type="primary" icon={<Plus className="h-4 w-4" aria-hidden />} onClick={openCreateModal}>
@@ -194,8 +236,12 @@ export function EmployeeManager({
               { required: true, message: 'Name is required.' },
               {
                 validator: async (_, value: string | undefined) => {
-                  if (!value?.trim()) {
+                  const trimmed = value?.trim()
+                  if (!trimmed) {
                     return Promise.reject(new Error('Name cannot be empty.'))
+                  }
+                  if (isEmployeeNameTaken(trimmed, employees, editingEmployee?.id)) {
+                    return Promise.reject(new Error('An employee with this name already exists.'))
                   }
                   return Promise.resolve()
                 },
@@ -225,6 +271,19 @@ export function EmployeeManager({
               mode="multiple"
               placeholder="Select roles"
               options={ROLE_OPTIONS.map((role) => ({ label: role, value: role }))}
+            />
+          </Form.Item>
+
+          <Form.Item
+            label="Unavailable days"
+            name="unavailableDays"
+            extra="Assignments on these days will be blocked and flagged if they already exist."
+          >
+            <Select
+              mode="multiple"
+              allowClear
+              placeholder="No restrictions (available all week)"
+              options={WEEK_DAY_OPTIONS.map((day) => ({ label: day.label, value: day.value }))}
             />
           </Form.Item>
         </Form>

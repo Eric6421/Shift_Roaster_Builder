@@ -1,5 +1,6 @@
 import { useCallback, useState } from 'react'
-import type { Employee, Shift, ShiftConflict } from '@/models/types'
+import type { DayOfWeek, Employee, Shift, ShiftConflict } from '@/models/types'
+import { SHIFT_EARLIEST_TIME, SHIFT_LATEST_TIME } from '@/models/types'
 
 function createId(): string {
   return crypto.randomUUID()
@@ -47,9 +48,51 @@ function longestConsecutiveRun(days: number[]): number {
   return longest
 }
 
-export function validateShift(shift: Shift, allShifts: Shift[]): ShiftConflict[] {
+function dayLabel(dayOfWeek: DayOfWeek): string {
+  const labels = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+  return labels[dayOfWeek]
+}
+
+export function isShiftTimeInAllowedRange(time: string): boolean {
+  return time >= SHIFT_EARLIEST_TIME && time <= SHIFT_LATEST_TIME
+}
+
+export function validateShiftTimes(startTime: string, endTime: string): string | null {
+  if (!isShiftTimeInAllowedRange(startTime) || !isShiftTimeInAllowedRange(endTime)) {
+    return 'Shifts must be between 9:00 AM and 7:00 PM.'
+  }
+  if (startTime >= endTime) {
+    return 'End time must be after start time.'
+  }
+  return null
+}
+
+export function isEmployeeAvailableOnDay(
+  employee: Employee | undefined,
+  dayOfWeek: DayOfWeek,
+): boolean {
+  if (!employee) {
+    return false
+  }
+  return !employee.unavailableDays.includes(dayOfWeek)
+}
+
+export function validateShift(
+  shift: Shift,
+  allShifts: Shift[],
+  employees: Employee[],
+): ShiftConflict[] {
   const conflicts: ShiftConflict[] = []
+  const employee = employees.find((e) => e.id === shift.employeeId)
   const employeeShifts = allShifts.filter((s) => s.employeeId === shift.employeeId)
+
+  if (employee && employee.unavailableDays.includes(shift.dayOfWeek)) {
+    conflicts.push({
+      type: 'unavailable',
+      message: `${employee.name} is not available on ${dayLabel(shift.dayOfWeek)}.`,
+      relatedShiftIds: [shift.id],
+    })
+  }
 
   const overlapping = employeeShifts.filter(
     (s) => s.id !== shift.id && shiftsOverlap(shift, s),
@@ -86,23 +129,60 @@ export function calculateWeeklyHours(shifts: Shift[]): Record<string, number> {
   return hoursByEmployee
 }
 
+export function isEmployeeNameTaken(
+  name: string,
+  employees: Employee[],
+  excludeEmployeeId?: string,
+): boolean {
+  const normalized = name.trim().toLocaleLowerCase()
+  if (!normalized) {
+    return false
+  }
+  return employees.some(
+    (employee) =>
+      employee.id !== excludeEmployeeId &&
+      employee.name.trim().toLocaleLowerCase() === normalized,
+  )
+}
+
 export function useRosterController() {
   const [employees, setEmployees] = useState<Employee[]>([])
   const [shifts, setShifts] = useState<Shift[]>([])
 
   const addEmployee = useCallback((input: Omit<Employee, 'id'>) => {
-    const employee: Employee = { ...input, id: createId() }
-    setEmployees((prev) => [...prev, employee])
+    const name = input.name.trim()
+    let employee: Employee | undefined
+    setEmployees((prev) => {
+      if (isEmployeeNameTaken(name, prev)) {
+        return prev
+      }
+      employee = { ...input, name, id: createId() }
+      return [...prev, employee]
+    })
     return employee
   }, [])
 
   const editEmployee = useCallback(
     (id: string, updates: Partial<Omit<Employee, 'id'>>) => {
-      setEmployees((prev) =>
-        prev.map((employee) =>
-          employee.id === id ? { ...employee, ...updates } : employee,
-        ),
-      )
+      let updated: Employee | undefined
+      setEmployees((prev) => {
+        const nextName = updates.name?.trim()
+        if (nextName && isEmployeeNameTaken(nextName, prev, id)) {
+          return prev
+        }
+        return prev.map((employee) => {
+          if (employee.id !== id) {
+            return employee
+          }
+          updated = {
+            ...employee,
+            ...updates,
+            ...(nextName ? { name: nextName } : {}),
+          }
+          return updated
+        })
+      })
+      return updated
     },
     [],
   )
@@ -137,8 +217,8 @@ export function useRosterController() {
   }, [])
 
   const validateShiftForRoster = useCallback(
-    (shift: Shift) => validateShift(shift, shifts),
-    [shifts],
+    (shift: Shift) => validateShift(shift, shifts, employees),
+    [shifts, employees],
   )
 
   const weeklyHours = useCallback(
