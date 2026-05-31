@@ -1,5 +1,6 @@
 import { Alert, Form, Input, Modal, Popconfirm, Space, Tag, Tooltip, message } from 'antd'
-import { AlertTriangle, Clock, Plus, Trash2, User } from 'lucide-react'
+import { AlertTriangle, Plus, Trash2, User } from 'lucide-react'
+import { SummaryPanel } from '@/views/SummaryPanel'
 import { useCallback, useMemo, useState } from 'react'
 import type { useRosterController } from '@/controllers/useRosterController'
 import type { DayOfWeek, Employee, Shift, ShiftConflict } from '@/models/types'
@@ -31,10 +32,6 @@ type CellTarget = {
   dayOfWeek: DayOfWeek
 }
 
-function formatHours(hours: number): string {
-  return Number.isInteger(hours) ? `${hours}h` : `${hours.toFixed(1)}h`
-}
-
 function hasConflicts(conflicts: ShiftConflict[] | undefined): boolean {
   return (conflicts?.length ?? 0) > 0
 }
@@ -64,8 +61,6 @@ export function RosterGrid({
   const [form] = Form.useForm<ShiftFormValues>()
   const [modalOpen, setModalOpen] = useState(false)
   const [cellTarget, setCellTarget] = useState<CellTarget | null>(null)
-
-  const weeklyHours = useMemo(() => calculateWeeklyHours(), [calculateWeeklyHours, shifts])
 
   const conflictsByShiftId = useMemo(() => {
     const map = new Map<string, ShiftConflict[]>()
@@ -230,38 +225,11 @@ export function RosterGrid({
           )}
         </div>
 
-        <aside className="w-full shrink-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm xl:w-64">
-          <div className="mb-3 flex items-center gap-2">
-            <Clock className="h-4 w-4 text-blue-600" aria-hidden />
-            <h3 className="text-sm font-semibold text-slate-900">Weekly hours</h3>
-          </div>
-          {employees.length === 0 ? (
-            <p className="text-sm text-slate-500">Hours summary appears once employees are added.</p>
-          ) : (
-            <ul className="space-y-2">
-              {employees.map((employee) => {
-                const hours = weeklyHours[employee.id] ?? 0
-                return (
-                  <li
-                    key={employee.id}
-                    className="flex items-center justify-between rounded-md bg-slate-50 px-3 py-2 text-sm"
-                  >
-                    <span className="truncate font-medium text-slate-800">{employee.name}</span>
-                    <span className="ml-2 shrink-0 tabular-nums text-slate-600">
-                      {formatHours(hours)}
-                    </span>
-                  </li>
-                )
-              })}
-              <li className="flex items-center justify-between border-t border-slate-200 pt-2 text-sm font-semibold text-slate-900">
-                <span>Total</span>
-                <span className="tabular-nums">
-                  {formatHours(Object.values(weeklyHours).reduce((sum, h) => sum + h, 0))}
-                </span>
-              </li>
-            </ul>
-          )}
-        </aside>
+        <SummaryPanel
+          employees={employees}
+          shifts={shifts}
+          calculateWeeklyHours={calculateWeeklyHours}
+        />
       </div>
 
       <Modal

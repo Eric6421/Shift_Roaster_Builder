@@ -22,6 +22,7 @@ src/
 │   ├── App.tsx
 │   ├── EmployeeManager.tsx
 │   ├── RosterGrid.tsx
+│   ├── SummaryPanel.tsx   # Weekly hours summary per employee
 │   └── components/
 │       └── AppShell.tsx
 ├── assets/           # Static images / icons
