@@ -4,6 +4,45 @@ A web app for managers to build and manage a weekly staff schedule for a small t
 
 ---
 
+## Screenshots
+
+**Employees** — add team members, assign roles, and mark unavailable days.
+
+![Employees tab with Add employee modal](src/assets/image_1.png)
+
+**Assign shift** — assign a shift to an employee on a specific day (times limited to 9:00 AM–7:00 PM).
+
+![Weekly roster with Assign shift modal](src/assets/image_2.png)
+
+**Weekly roster** — view the full schedule grid, unavailable days, and weekly hours summary. Export the roster as CSV.
+
+![Weekly roster grid with shifts and hours summary](src/assets/image_3.png)
+
+---
+
+## Setup
+
+**Requirements:** [Node.js] and npm.
+
+From the project root, run:
+
+```bash
+npm install
+npm run dev
+```
+
+Then open [http://localhost:5173/](http://localhost:5173/) in your browser.
+
+All roster data is kept in memory for the session.
+
+---
+
+## Design decisions
+
+- **MVC-style layout** — `models/` holds plain TypeScript types and constants; `controllers/` owns roster logic (CRUD, validation, hours, CSV export); `views/` are React UI only. This keeps scheduling rules testable and separate from presentation.
+
+---
+
 ### Folder structure (MVC)
 
 ```
