@@ -1,11 +1,13 @@
-import { Button, Card, ConfigProvider, Space } from 'antd'
+import { ConfigProvider } from 'antd'
 import { format } from 'date-fns'
-import { useAppContext } from '@/controllers'
+import { useAppContext, useRosterController } from '@/controllers'
 import { AppShell } from '@/views/components/AppShell'
+import { EmployeeManager } from '@/views/EmployeeManager'
 
 function App() {
   const { appName } = useAppContext()
   const today = format(new Date(), 'EEEE, MMM d, yyyy')
+  const roster = useRosterController()
 
   return (
     <ConfigProvider
@@ -17,15 +19,12 @@ function App() {
       }}
     >
       <AppShell title={appName} subtitle={today}>
-        <Card className="max-w-lg shadow-sm">
-          <Space direction="vertical" size="middle">
-            <p className="text-slate-600">
-              Vite + React + TypeScript, Ant Design, Tailwind, lucide-react, and
-              date-fns are wired up. MVC folders are under <code>src/</code>.
-            </p>
-            <Button type="primary">Ant Design button</Button>
-          </Space>
-        </Card>
+        <EmployeeManager
+          employees={roster.employees}
+          addEmployee={roster.addEmployee}
+          editEmployee={roster.editEmployee}
+          removeEmployee={roster.removeEmployee}
+        />
       </AppShell>
     </ConfigProvider>
   )
