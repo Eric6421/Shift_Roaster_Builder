@@ -12,11 +12,9 @@ import {
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { Pencil, Plus, Trash2 } from 'lucide-react'
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useState } from 'react'
 import type { useRosterController } from '@/controllers/useRosterController'
-import type { Employee } from '@/models/types'
-
-const DEFAULT_ROLE_OPTIONS = ['Cashier', 'Supervisor', 'Cook']
+import { ROLE_OPTIONS, type Employee } from '@/models/types'
 
 type EmployeeFormValues = {
   name: string
@@ -39,11 +37,6 @@ export function EmployeeManager({
   const [form] = Form.useForm<EmployeeFormValues>()
   const [modalOpen, setModalOpen] = useState(false)
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null)
-
-  const roleOptions = useMemo(() => {
-    const fromEmployees = employees.flatMap((employee) => employee.roles)
-    return [...new Set([...DEFAULT_ROLE_OPTIONS, ...fromEmployees])].sort()
-  }, [employees])
 
   const openCreateModal = useCallback(() => {
     setEditingEmployee(null)
@@ -70,7 +63,9 @@ export function EmployeeManager({
     try {
       const values = await form.validateFields()
       const name = values.name.trim()
-      const roles = values.roles.map((role) => role.trim()).filter(Boolean)
+      const roles = values.roles.filter((role) =>
+        (ROLE_OPTIONS as readonly string[]).includes(role),
+      )
 
       if (!name) {
         message.error('Employee name cannot be empty.')
@@ -227,10 +222,9 @@ export function EmployeeManager({
             ]}
           >
             <Select
-              mode="tags"
-              placeholder="Select or type roles"
-              options={roleOptions.map((role) => ({ label: role, value: role }))}
-              tokenSeparators={[',']}
+              mode="multiple"
+              placeholder="Select roles"
+              options={ROLE_OPTIONS.map((role) => ({ label: role, value: role }))}
             />
           </Form.Item>
         </Form>

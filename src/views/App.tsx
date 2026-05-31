@@ -31,6 +31,7 @@ function App() {
                   employees={roster.employees}
                   shifts={roster.shifts}
                   assignShift={roster.assignShift}
+                  editShift={roster.editShift}
                   removeShift={roster.removeShift}
                   validateShift={roster.validateShift}
                   calculateWeeklyHours={roster.calculateWeeklyHours}

@@ -1,5 +1,5 @@
 import { Alert, Form, Input, Modal, Popconfirm, Space, Tag, Tooltip, message } from 'antd'
-import { AlertTriangle, Plus, Trash2, User } from 'lucide-react'
+import { AlertTriangle, Clock, Plus, Trash2, User } from 'lucide-react'
 import { SummaryPanel } from '@/views/SummaryPanel'
 import { useCallback, useMemo, useState } from 'react'
 import type { useRosterController } from '@/controllers/useRosterController'
@@ -15,14 +15,23 @@ const DAYS: { value: DayOfWeek; label: string; short: string }[] = [
   { value: 6, label: 'Sunday', short: 'Sun' },
 ]
 
+const SHIFT_DRAG_TYPE = 'application/x-shift-id'
+
 type ShiftFormValues = {
+  name: string
   startTime: string
   endTime: string
 }
 
 type RosterGridActions = Pick<
   ReturnType<typeof useRosterController>,
-  'employees' | 'shifts' | 'assignShift' | 'removeShift' | 'validateShift' | 'calculateWeeklyHours'
+  | 'employees'
+  | 'shifts'
+  | 'assignShift'
+  | 'editShift'
+  | 'removeShift'
+  | 'validateShift'
+  | 'calculateWeeklyHours'
 >
 
 type RosterGridProps = RosterGridActions
@@ -31,6 +40,12 @@ type CellTarget = {
   employeeId: string
   dayOfWeek: DayOfWeek
 }
+
+type ModalContext =
+  | { mode: 'assign'; employeeId: string; dayOfWeek: DayOfWeek }
+  | { mode: 'edit'; shift: Shift }
+
+type DropTarget = CellTarget
 
 function hasConflicts(conflicts: ShiftConflict[] | undefined): boolean {
   return (conflicts?.length ?? 0) > 0
@@ -50,17 +65,36 @@ function employeeHasConsecutiveConflict(
   )
 }
 
+function notifyConflicts(
+  shift: Shift | undefined,
+  validateShift: (shift: Shift) => ShiftConflict[],
+  successMessage: string,
+) {
+  if (!shift) {
+    return
+  }
+  const conflicts = validateShift(shift)
+  if (conflicts.length > 0) {
+    message.warning(conflicts.map((c) => c.message).join(' '))
+  } else {
+    message.success(successMessage)
+  }
+}
+
 export function RosterGrid({
   employees,
   shifts,
   assignShift,
+  editShift,
   removeShift,
   validateShift,
   calculateWeeklyHours,
 }: RosterGridProps) {
   const [form] = Form.useForm<ShiftFormValues>()
   const [modalOpen, setModalOpen] = useState(false)
-  const [cellTarget, setCellTarget] = useState<CellTarget | null>(null)
+  const [modalContext, setModalContext] = useState<ModalContext | null>(null)
+  const [draggingShiftId, setDraggingShiftId] = useState<string | null>(null)
+  const [dropTarget, setDropTarget] = useState<DropTarget | null>(null)
 
   const conflictsByShiftId = useMemo(() => {
     const map = new Map<string, ShiftConflict[]>()
@@ -91,8 +125,21 @@ export function RosterGrid({
 
   const openAssignModal = useCallback(
     (employeeId: string, dayOfWeek: DayOfWeek) => {
-      setCellTarget({ employeeId, dayOfWeek })
-      form.setFieldsValue({ startTime: '09:00', endTime: '17:00' })
+      setModalContext({ mode: 'assign', employeeId, dayOfWeek })
+      form.setFieldsValue({ name: '', startTime: '09:00', endTime: '17:00' })
+      setModalOpen(true)
+    },
+    [form],
+  )
+
+  const openEditModal = useCallback(
+    (shift: Shift) => {
+      setModalContext({ mode: 'edit', shift })
+      form.setFieldsValue({
+        name: shift.name,
+        startTime: shift.startTime,
+        endTime: shift.endTime,
+      })
       setModalOpen(true)
     },
     [form],
@@ -100,17 +147,18 @@ export function RosterGrid({
 
   const closeModal = useCallback(() => {
     setModalOpen(false)
-    setCellTarget(null)
+    setModalContext(null)
     form.resetFields()
   }, [form])
 
-  const handleAssignShift = useCallback(async () => {
-    if (!cellTarget) {
+  const handleSaveShift = useCallback(async () => {
+    if (!modalContext) {
       return
     }
 
     try {
       const values = await form.validateFields()
+      const name = values.name.trim()
       const { startTime, endTime } = values
 
       if (startTime >= endTime) {
@@ -118,25 +166,25 @@ export function RosterGrid({
         return
       }
 
-      const shift = assignShift({
-        employeeId: cellTarget.employeeId,
-        dayOfWeek: cellTarget.dayOfWeek,
-        startTime,
-        endTime,
-      })
-
-      const conflicts = validateShift(shift)
-      if (conflicts.length > 0) {
-        message.warning(conflicts.map((c) => c.message).join(' '))
+      if (modalContext.mode === 'assign') {
+        const shift = assignShift({
+          employeeId: modalContext.employeeId,
+          dayOfWeek: modalContext.dayOfWeek,
+          name,
+          startTime,
+          endTime,
+        })
+        notifyConflicts(shift, validateShift, 'Shift assigned.')
       } else {
-        message.success('Shift assigned.')
+        const shift = editShift(modalContext.shift.id, { name, startTime, endTime })
+        notifyConflicts(shift, validateShift, 'Shift updated.')
       }
 
       closeModal()
     } catch {
       message.error('Please fix the highlighted fields before saving.')
     }
-  }, [assignShift, cellTarget, closeModal, form, validateShift])
+  }, [assignShift, closeModal, editShift, form, modalContext, validateShift])
 
   const handleRemoveShift = useCallback(
     (shift: Shift) => {
@@ -146,10 +194,55 @@ export function RosterGrid({
     [removeShift],
   )
 
-  const targetEmployee = cellTarget
-    ? employees.find((e) => e.id === cellTarget.employeeId)
-    : undefined
-  const targetDay = cellTarget ? DAYS.find((d) => d.value === cellTarget.dayOfWeek) : undefined
+  const handleDragStart = useCallback((shiftId: string) => {
+    setDraggingShiftId(shiftId)
+  }, [])
+
+  const handleDragEnd = useCallback(() => {
+    setDraggingShiftId(null)
+    setDropTarget(null)
+  }, [])
+
+  const handleDragOverCell = useCallback((target: DropTarget | null) => {
+    setDropTarget(target)
+  }, [])
+
+  const handleDropShift = useCallback(
+    (shiftId: string, target: DropTarget) => {
+      const shift = shifts.find((s) => s.id === shiftId)
+      if (!shift) {
+        return
+      }
+
+      if (shift.employeeId === target.employeeId && shift.dayOfWeek === target.dayOfWeek) {
+        return
+      }
+
+      const updated = editShift(shiftId, {
+        employeeId: target.employeeId,
+        dayOfWeek: target.dayOfWeek,
+      })
+      notifyConflicts(updated, validateShift, 'Shift moved.')
+    },
+    [editShift, shifts, validateShift],
+  )
+
+  const modalEmployee =
+    modalContext?.mode === 'assign'
+      ? employees.find((e) => e.id === modalContext.employeeId)
+      : modalContext?.mode === 'edit'
+        ? employees.find((e) => e.id === modalContext.shift.employeeId)
+        : undefined
+
+  const modalDay =
+    modalContext?.mode === 'assign'
+      ? DAYS.find((d) => d.value === modalContext.dayOfWeek)
+      : modalContext?.mode === 'edit'
+        ? DAYS.find((d) => d.value === modalContext.shift.dayOfWeek)
+        : undefined
+
+  const modalTitle = modalContext?.mode === 'edit' ? 'Edit shift' : 'Assign shift'
+  const modalOkText = modalContext?.mode === 'edit' ? 'Save changes' : 'Assign shift'
 
   return (
     <div className="mx-auto w-full max-w-7xl">
@@ -157,8 +250,8 @@ export function RosterGrid({
         <div>
           <h2 className="text-lg font-semibold text-slate-900">Weekly roster</h2>
           <p className="text-sm text-slate-600">
-            Assign shifts across the week. Overlapping shifts and more than 5 consecutive days are
-            flagged.
+            Assign shifts across the week. Drag a shift to another day or employee. Overlapping
+            shifts and more than 5 consecutive days are flagged.
           </p>
         </div>
         {conflictCount > 0 ? (
@@ -215,8 +308,15 @@ export function RosterGrid({
                       hasConsecutiveConflict={hasConsecutiveConflict}
                       shiftsByEmployeeDay={shiftsByEmployeeDay}
                       conflictsByShiftId={conflictsByShiftId}
+                      draggingShiftId={draggingShiftId}
+                      dropTarget={dropTarget}
                       onAssign={openAssignModal}
+                      onEdit={openEditModal}
                       onRemove={handleRemoveShift}
+                      onDragStart={handleDragStart}
+                      onDragEnd={handleDragEnd}
+                      onDragOverCell={handleDragOverCell}
+                      onDropShift={handleDropShift}
                     />
                   )
                 })}
@@ -233,20 +333,25 @@ export function RosterGrid({
       </div>
 
       <Modal
-        title="Assign shift"
+        title={modalTitle}
         open={modalOpen}
         onCancel={closeModal}
-        onOk={handleAssignShift}
-        okText="Assign shift"
+        onOk={handleSaveShift}
+        okText={modalOkText}
         destroyOnHidden
       >
-        {targetEmployee && targetDay ? (
+        {modalEmployee && modalDay ? (
           <div className="mb-5 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
-            <p className="text-sm font-semibold text-slate-900">{targetEmployee.name}</p>
-            <p className="mt-0.5 text-sm text-slate-600">{targetDay.label}</p>
-            {targetEmployee.roles.length > 0 ? (
+            <p className="text-sm text-slate-600">
+              <span className="font-medium text-slate-500">Employee:</span>{' '}
+              <span className="font-semibold text-slate-900">{modalEmployee.name}</span>
+            </p>
+            <p className="mt-1 text-sm text-slate-600">
+              <span className="font-medium text-slate-500">Day:</span> {modalDay.label}
+            </p>
+            {modalEmployee.roles.length > 0 ? (
               <Space size={[4, 4]} wrap className="mt-2">
-                {targetEmployee.roles.map((role) => (
+                {modalEmployee.roles.map((role) => (
                   <Tag key={role} className="!m-0 !text-[10px]">
                     {role}
                   </Tag>
@@ -256,6 +361,13 @@ export function RosterGrid({
           </div>
         ) : null}
         <Form<ShiftFormValues> form={form} layout="vertical">
+          <Form.Item
+            label="Shift name"
+            name="name"
+            rules={[{ required: true, message: 'Shift name is required.' }]}
+          >
+            <Input placeholder="e.g. Morning shift" maxLength={60} autoFocus />
+          </Form.Item>
           <Form.Item
             label="Start time"
             name="startTime"
@@ -281,8 +393,15 @@ type EmployeeRowProps = {
   hasConsecutiveConflict: boolean
   shiftsByEmployeeDay: Map<string, Shift[]>
   conflictsByShiftId: Map<string, ShiftConflict[]>
+  draggingShiftId: string | null
+  dropTarget: DropTarget | null
   onAssign: (employeeId: string, dayOfWeek: DayOfWeek) => void
+  onEdit: (shift: Shift) => void
   onRemove: (shift: Shift) => void
+  onDragStart: (shiftId: string) => void
+  onDragEnd: () => void
+  onDragOverCell: (target: DropTarget | null) => void
+  onDropShift: (shiftId: string, target: DropTarget) => void
 }
 
 function EmployeeRow({
@@ -290,8 +409,15 @@ function EmployeeRow({
   hasConsecutiveConflict,
   shiftsByEmployeeDay,
   conflictsByShiftId,
+  draggingShiftId,
+  dropTarget,
   onAssign,
+  onEdit,
   onRemove,
+  onDragStart,
+  onDragEnd,
+  onDragOverCell,
+  onDropShift,
 }: EmployeeRowProps) {
   return (
     <>
@@ -317,16 +443,52 @@ function EmployeeRow({
       </div>
 
       {DAYS.map((day) => {
+        const cellTarget: DropTarget = { employeeId: employee.id, dayOfWeek: day.value }
         const cellShifts = shiftsByEmployeeDay.get(`${employee.id}-${day.value}`) ?? []
         const isEmpty = cellShifts.length === 0
+        const isDropTarget =
+          draggingShiftId !== null &&
+          dropTarget?.employeeId === cellTarget.employeeId &&
+          dropTarget?.dayOfWeek === cellTarget.dayOfWeek
 
         return (
           <div
             key={day.value}
             className={[
               'group relative min-h-[88px] border-b border-r border-slate-200 p-1.5 last:border-r-0',
-              isEmpty ? 'bg-slate-50/40' : 'bg-white hover:bg-slate-50/80',
+              isDropTarget
+                ? 'bg-blue-50 ring-2 ring-inset ring-blue-400'
+                : isEmpty
+                  ? 'bg-slate-50/40'
+                  : 'bg-white hover:bg-slate-50/80',
             ].join(' ')}
+            onDragOver={(event) => {
+              if (!event.dataTransfer.types.includes(SHIFT_DRAG_TYPE)) {
+                return
+              }
+              event.preventDefault()
+              event.dataTransfer.dropEffect = 'move'
+              onDragOverCell(cellTarget)
+            }}
+            onDragLeave={(event) => {
+              if (event.currentTarget.contains(event.relatedTarget as Node)) {
+                return
+              }
+              if (
+                dropTarget?.employeeId === cellTarget.employeeId &&
+                dropTarget?.dayOfWeek === cellTarget.dayOfWeek
+              ) {
+                onDragOverCell(null)
+              }
+            }}
+            onDrop={(event) => {
+              event.preventDefault()
+              const shiftId = event.dataTransfer.getData(SHIFT_DRAG_TYPE)
+              if (shiftId) {
+                onDropShift(shiftId, cellTarget)
+              }
+              onDragEnd()
+            }}
           >
             {isEmpty ? (
               <button
@@ -346,7 +508,11 @@ function EmployeeRow({
                       key={shift.id}
                       shift={shift}
                       conflicts={conflictsByShiftId.get(shift.id)}
+                      isDragging={draggingShiftId === shift.id}
+                      onEdit={onEdit}
                       onRemove={onRemove}
+                      onDragStart={onDragStart}
+                      onDragEnd={onDragEnd}
                     />
                   ))}
                 </div>
@@ -371,48 +537,83 @@ function EmployeeRow({
 type ShiftBlockProps = {
   shift: Shift
   conflicts: ShiftConflict[] | undefined
+  isDragging: boolean
+  onEdit: (shift: Shift) => void
   onRemove: (shift: Shift) => void
+  onDragStart: (shiftId: string) => void
+  onDragEnd: () => void
 }
 
-function ShiftBlock({ shift, conflicts, onRemove }: ShiftBlockProps) {
+function ShiftBlock({
+  shift,
+  conflicts,
+  isDragging,
+  onEdit,
+  onRemove,
+  onDragStart,
+  onDragEnd,
+}: ShiftBlockProps) {
   const conflicted = hasConflicts(conflicts)
   const conflictMessages = conflicts?.map((c) => c.message).join(' ') ?? ''
 
   return (
-    <Tooltip title={conflicted ? conflictMessages : undefined}>
+    <Tooltip title={conflicted ? conflictMessages : 'Drag to another day or employee'}>
       <div
+        draggable
+        onDragStart={(event) => {
+          event.dataTransfer.setData(SHIFT_DRAG_TYPE, shift.id)
+          event.dataTransfer.effectAllowed = 'move'
+          onDragStart(shift.id)
+        }}
+        onDragEnd={onDragEnd}
         className={[
-          'group/shift relative rounded px-2 py-1.5 text-xs leading-tight',
+          'group/shift relative cursor-grab rounded px-2 py-1.5 text-xs leading-tight active:cursor-grabbing',
+          isDragging ? 'opacity-40' : '',
           conflicted
             ? 'border-2 border-red-400 bg-red-50 text-red-900 shadow-sm'
             : 'border border-blue-200 bg-blue-50 text-blue-900',
         ].join(' ')}
       >
-        <div className="flex items-center gap-1 pr-5 font-medium tabular-nums">
-          {conflicted ? (
-            <AlertTriangle
-              className="h-3.5 w-3.5 shrink-0 text-red-500"
-              aria-label="Scheduling conflict"
-            />
+        <div className="flex flex-col gap-0.5 pr-10">
+          {shift.name ? (
+            <span className="truncate font-semibold leading-tight">{shift.name}</span>
           ) : null}
-          <span>
-            {shift.startTime} – {shift.endTime}
-          </span>
+          <div className="flex items-center gap-1 font-medium tabular-nums">
+            {conflicted ? (
+              <AlertTriangle
+                className="h-3.5 w-3.5 shrink-0 text-red-500"
+                aria-label="Scheduling conflict"
+              />
+            ) : null}
+            <span>
+              {shift.startTime} – {shift.endTime}
+            </span>
+          </div>
         </div>
-        <Popconfirm
-          title="Remove this shift?"
-          okText="Remove"
-          okButtonProps={{ danger: true }}
-          onConfirm={() => onRemove(shift)}
-        >
+        <div className="absolute right-1 top-1 flex gap-0.5 opacity-0 transition-opacity group-hover/shift:opacity-100">
           <button
             type="button"
-            className="absolute right-1 top-1 rounded p-0.5 text-slate-400 opacity-0 transition-opacity hover:bg-white/60 hover:text-red-600 group-hover/shift:opacity-100 focus:opacity-100"
-            aria-label={`Remove shift ${shift.startTime} to ${shift.endTime}`}
+            onClick={() => onEdit(shift)}
+            className="rounded p-0.5 text-slate-400 hover:bg-white/60 hover:text-blue-600 focus:opacity-100"
+            aria-label={`Edit shift ${shift.name || `${shift.startTime} to ${shift.endTime}`}`}
           >
-            <Trash2 className="h-3 w-3" aria-hidden />
+            <Clock className="h-3 w-3" aria-hidden />
           </button>
-        </Popconfirm>
+          <Popconfirm
+            title="Remove this shift?"
+            okText="Remove"
+            okButtonProps={{ danger: true }}
+            onConfirm={() => onRemove(shift)}
+          >
+            <button
+              type="button"
+              className="rounded p-0.5 text-slate-400 hover:bg-white/60 hover:text-red-600 focus:opacity-100"
+              aria-label={`Remove shift ${shift.name || `${shift.startTime} to ${shift.endTime}`}`}
+            >
+              <Trash2 className="h-3 w-3" aria-hidden />
+            </button>
+          </Popconfirm>
+        </div>
       </div>
     </Tooltip>
   )

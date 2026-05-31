@@ -122,6 +122,20 @@ export function useRosterController() {
     setShifts((prev) => prev.filter((shift) => shift.id !== id))
   }, [])
 
+  const editShift = useCallback((id: string, updates: Partial<Omit<Shift, 'id'>>) => {
+    let updated: Shift | undefined
+    setShifts((prev) =>
+      prev.map((shift) => {
+        if (shift.id !== id) {
+          return shift
+        }
+        updated = { ...shift, ...updates }
+        return updated
+      }),
+    )
+    return updated
+  }, [])
+
   const validateShiftForRoster = useCallback(
     (shift: Shift) => validateShift(shift, shifts),
     [shifts],
@@ -139,6 +153,7 @@ export function useRosterController() {
     editEmployee,
     removeEmployee,
     assignShift,
+    editShift,
     removeShift,
     validateShift: validateShiftForRoster,
     calculateWeeklyHours: weeklyHours,

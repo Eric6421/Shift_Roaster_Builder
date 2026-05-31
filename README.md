@@ -13,16 +13,16 @@ docs/
 src/
 ├── models/           # Types & domain shapes (no React)
 │   ├── index.ts
-│   └── types.ts
+│   └── types.ts      # Employee, Shift, ROLE_OPTIONS, conflict types
 ├── controllers/      # Hooks, context, business logic
 │   ├── index.ts
 │   ├── AppProvider.tsx
-│   └── useRosterController.ts
+│   └── useRosterController.ts   # CRUD, validation, weekly hours
 ├── views/            # Presentational React components
 │   ├── App.tsx
 │   ├── EmployeeManager.tsx
-│   ├── RosterGrid.tsx
-│   ├── SummaryPanel.tsx   # Weekly hours summary per employee
+│   ├── RosterGrid.tsx           # Grid, assign/edit modal, drag-and-drop
+│   ├── SummaryPanel.tsx         # Weekly hours summary per employee
 │   └── components/
 │       └── AppShell.tsx
 ├── assets/           # Static images / icons
